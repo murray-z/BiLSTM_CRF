@@ -15,6 +15,11 @@ import data_helper
 from config import config
 import json
 
+if config['use_gpu']:
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+else:
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 def train(config):
     learning_rate = config['learning_rate']
@@ -95,10 +100,6 @@ def train(config):
                     label_list.append(viterbi_seq)
                 return label_list
 
-            def accuracy(label_list, input_y, seq_len_list):
-                # 计算准确率
-                pass
-
             def train_step(x_batch, y_batch, sequence_lengths):
                 feed_dict = {
                     bilstm_crf.input_x: x_batch,
@@ -115,10 +116,11 @@ def train(config):
 
                 label_list = viterbi_decoder(logits, sequence_lengths, transition_params)
 
-                # 计算准确率
+                acc, recall, f1 = data_helper.measure(y_batch, label_list, sequence_lengths)
 
                 time_str = datetime.datetime.now().isoformat()
-                print("{}: step {}, loss {:g}".format(time_str, step, loss))
+                print("training: {}: step {}, loss {:g}, acc {:.2f} recall {:.2f} f1 {:.2f}".format
+                      (time_str, step, loss, acc, recall, f1))
                 train_summary_writer.add_summary(summaries, step)
 
             def dev_step(x_batch, y_batch, sequence_lengths, writer=None):
@@ -134,8 +136,12 @@ def train(config):
                     feed_dict=feed_dic
                 )
 
+                label_list = viterbi_decoder(logits, sequence_lengths, transition_params)
+
+                acc, recall, f1 = data_helper.measure(y_batch, label_list, sequence_lengths)
+
                 time_str = datetime.datetime.now().isoformat()
-                print("{}: step {}, loss {:g}".format(time_str, step, loss))
+                print("{}: step {}, loss {:g}, f1 {:.2f}".format(time_str, step, loss, f1))
                 if writer:
                     writer.add_summary(summaries, step)
 
@@ -143,7 +149,6 @@ def train(config):
             batches = data_helper.generate_batchs(x_train, y_train, sequences_length_train, config)
             for batch in batches:
                 x_batch, y_batch, sequence_length_batch = zip(*batch)
-
                 train_step(x_batch, y_batch, sequence_length_batch)
                 current_step = tf.train.global_step(sess, global_step)
                 if current_step % config['evaluate_every'] == 0:

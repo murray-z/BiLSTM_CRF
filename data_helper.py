@@ -11,7 +11,7 @@ from collections import Counter
 import os
 import json
 import numpy as np
-import re
+import sys
 
 
 def extract_ner_from_raw(input_file_path, output_file_path):
@@ -39,10 +39,12 @@ def process_data(config):
     X = []
     y = []
     with open(data_path, 'r', encoding='utf-8') as f:
-        for line in f.readlines()[:200]:
+        for line in f:
             lis = line.strip().split('\t')
-            X.append(lis[0])
-            y.append(lis[1])
+            if 'B' in lis[-1]:
+
+                X.append(lis[0])
+                y.append(lis[1])
     return X, y
 
 
@@ -96,13 +98,14 @@ def generate_vocab(X, y, config):
 
 
 def padding(X, y, word_to_index, label_to_index):
-    sequence_lengths = [len(line) for line in X]
-    max_sequence_length = max(sequence_lengths)
+    sequence_lengths = []
+    max_sequence_length = config['max_seq_length']
     input_x = []
     for line in X:
         temp = []
         for item in list(line):
             temp.append(word_to_index.get(item, 0))
+        sequence_lengths.append(min(len(temp), max_sequence_length))
         input_x.append(temp[:max_sequence_length]+[0]*(max_sequence_length-len(temp)))
     if not y:
         return input_x
@@ -113,7 +116,7 @@ def padding(X, y, word_to_index, label_to_index):
         tags = str_tag.split()
         for item in tags:
             temp.append(label_to_index[item])
-        input_y.append(temp+[label_to_index['O']]*(max_sequence_length-len(temp)))
+        input_y.append(temp[:max_sequence_length]+[label_to_index['O']]*(max_sequence_length-len(temp)))
     return input_x, input_y, sequence_lengths
 
 
@@ -162,6 +165,83 @@ def load_json(json_file_path):
         return json.loads(f.read(), encoding='utf-8')
 
 
+def measure(labels, logits, seq_len_list):
+    """
+    计算acc,recall,f1
+    :param labels:
+    :param logits:
+    :param seq_len_list:
+    :return:
+    """
+    index_to_label = load_json('./vocabs/index_to_label.json')
+
+    accuracy = [0.0, 0.0]
+    recall = [0.0, 0.0]
+    all_labels = []
+    all_logits = []
+    for i in range(len(labels)):
+        len_seq = seq_len_list[i]
+        all_labels.extend(list(labels[i])[:len_seq])
+        all_logits.extend(list(logits[i])[:len_seq])
+
+    if len(all_logits) != len(all_labels):
+        print('len_labels != len_logits')
+        sys.exit()
+
+    all_labels = [index_to_label[str(item)] for item in all_labels]
+    all_logits = [index_to_label[str(item)] for item in all_logits]
+
+    # print(all_labels)
+    # print(all_logits)
+
+
+    flag = False
+    tag = ''
+    for i in range(len(all_labels)):
+        if not flag and all_labels[i].startswith('B'):
+            tag = all_labels[i].split('-')[1]
+            header = i
+            flag = True
+            recall[1] += 1
+
+        if flag and tag not in all_labels[i]:
+            if all_labels[header] == all_logits[header] and all_labels[i-1] == all_logits[i-1]:
+                recall[0] += 1
+                flag = False
+
+    flag = False
+    tag = ''
+    for i in range(len(all_labels)):
+        if not flag and all_logits[i].startswith('B'):
+            tag = all_labels[i].split('-')[-1]
+            header = i
+            flag = True
+            accuracy[1] += 1
+
+        if flag and tag not in all_logits[i]:
+            if all_labels[header] == all_logits[header] and all_labels[i - 1] == all_logits[i - 1]:
+                accuracy[0] += 1
+                flag = False
+
+    if accuracy[1] == 0:
+        acc = 0.0
+    else:
+        acc = accuracy[0]/accuracy[1]
+
+    if recall[1] == 0:
+        recall = 0
+    else:
+        recall = recall[0]/recall[1]
+
+    if acc+recall == 0:
+        f1 = 0.0
+    else:
+        f1 = 2*acc*recall/(acc+recall)
+
+    return acc, recall, f1
+
+
 if __name__ == '__main__':
-    # extract_ner_from_raw('./data/yuqing.txt', './data/ner.txt')
-    a, b = process_data(config)
+    labels = [[0, 2, 4, 4, 0, 0, 6, 5, 0]]
+    logits = [[0, 2, 4, 4, 0, 6, 5, 5, 0]]
+    print(measure(labels, logits, [9]))
